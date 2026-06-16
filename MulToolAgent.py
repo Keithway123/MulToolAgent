@@ -1,40 +1,57 @@
 import os
-from json import tool
+import json
 
 from dotenv import load_dotenv
-from langchain.chat_models import  init_chat_model
+from langchain.chat_models import init_chat_model
+from langchain.tools import tool
 from langchain.agents import create_agent
-from langchain.tools import  tool
-from langchain.messages import AIMessage
-from openai.resources.chat.completions import messages
+from typing import TypedDict,List,Optional
+
 
 load_dotenv()
-
 model = init_chat_model(
     model="qwen3.7-plus",
     model_provider="openai",
-    api_key = os.getenv("DASHSCOPE_API_KEY"),
-    base_url = os.getenv("DASHSCOPE_BASE_URL")
+    api_key=os.getenv("DASHSCOPE_API_KEY"),
+    base_url=os.getenv("DASHSCOPE_BASE_URL")
 )
 
-@tool
-def get_weather(city:str)->str:
-    """Get weather for a given city."""
-    return f"{city}当前天气:晴天,25℃"
+class AgentState(TypedDict):
+    message:List[dict]          #对话历史
+    current_input:str           #当前用户输入
+    tool_name:Optional[str]     #要调用的工具
+    tool_args:Optional[dict]    #工具参数
+    tool_result: Optional[str]  #工具返回结果
+    error:Optional[str]         #错误信息
 
-system_prompt = """
-You are a mul Tool assistant.
-Your Name is Qwen man .
-"""
+#Planner
+def planner_node(state:AgentState):
+    user_input = state["current_input"]
+    prompt= f"""
+            你是一个Agent决策器。
+            用户输入：{user_input}
+            请判断：
+            1. 是否需要调用工具
+            2. 如果需要，选择 tool_name 和参数
+            
+            可用工具：
+            - weather(city)
+            
+            只返回以下JSON格式,不需要解释：
+            {{
+              "tool_name": "...",
+              "tool_args": {{"city": "..."}}
+            }}
+            """
+    response = model.invoke(prompt)
+    content = response.content
 
-agent = create_agent(
-    model,
-    tools=[get_weather],
-    system_prompt=system_prompt
-)
+    try:
+        parsed = json.loads(content)
+        return {
+            "tool_name":parsed.get("tool_name"),
+            "tool_args":parsed.get("tool_args",{})
+        }
+    except Exception as e :
+        return {"error":f"LLM输出解析失败:{str(e)}"}
 
-response = agent.invoke(
-    {"message":[("user", "今天东莞市天气如何？")]}
-)
-
-print(response["messages"][-1].content)
